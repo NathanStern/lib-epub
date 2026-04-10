@@ -1160,7 +1160,6 @@ pub struct StyleOptions {
 }
 
 #[cfg(feature = "content-builder")]
-#[cfg(feature = "builder")]
 impl StyleOptions {
     /// Creates a new style options with default values
     pub fn new() -> Self {

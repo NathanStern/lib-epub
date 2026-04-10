@@ -30,7 +30,7 @@ lib-epub = "0.3.0"
 
 ## Quick Start
 
-Reading an EPUB file and extracting metadata:
+### Reading an EPUB file
 
 ```rust
 use lib_epub::{error::EpubError, epub::EpubDoc};
@@ -51,7 +51,7 @@ fn main() -> Result<(), EpubError> {
 }
 ```
 
-Building an EPUB file:
+### Building an EPUB file
 
 ```rust
 use lib_epub::{
@@ -99,7 +99,9 @@ fn main() -> Result<(), EpubError> {
 }
 ```
 
-Building an content document:
+For more guides, please see [build epub guides](./docs/build-epub.md).
+
+### Building an content document
 
 ```rust
 use lib_epub::{
@@ -129,6 +131,8 @@ fn main() -> Result<(), lib_epub::error::EpubError> {
     Ok(())
 }
 ```
+
+For more guides, please see [build content guides](./docs/build-content.md).
 
 ## MSRV
 
