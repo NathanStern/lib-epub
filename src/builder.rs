@@ -479,7 +479,7 @@ impl EpubBuilder<EpubVersion3> {
     /// - This type of conversion will upgrade Epub2.x publications to Epub3.x.
     ///   This upgrade conversion may encounter unknown errors (it is unclear whether
     ///   it will cause errors), so please use it with caution.
-    pub fn from<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Result<Self, EpubError> {
+    pub fn from<R: Read + Seek + Send>(doc: &mut EpubDoc<R>) -> Result<Self, EpubError> {
         let mut builder = Self::new()?;
 
         builder.add_rootfile(doc.package_path.clone().to_string_lossy())?;
@@ -721,7 +721,7 @@ fn normalize_manifest_path<TempD: AsRef<Path>, S: AsRef<str>, P: AsRef<Path>>(
     let basic_path = remove_leading_slash(opf_path.parent().unwrap());
 
     // convert manifest path to absolute path(physical path)
-    let mut target_path = if path.as_ref().starts_with("../") {
+    let target_path = if path.as_ref().starts_with("../") {
         check_realtive_link_leakage(
             temp_dir.as_ref().to_path_buf(),
             basic_path.to_path_buf(),
@@ -731,8 +731,8 @@ fn normalize_manifest_path<TempD: AsRef<Path>, S: AsRef<str>, P: AsRef<Path>>(
         .ok_or_else(|| EpubError::RelativeLinkLeakage {
             path: path.as_ref().to_string_lossy().to_string(),
         })?
-    } else if let Ok(path) = path.as_ref().strip_prefix("/") {
-        temp_dir.as_ref().join(path)
+    } else if let Ok(stripped) = path.as_ref().strip_prefix("/") {
+        temp_dir.as_ref().join(stripped)
     } else if path.as_ref().starts_with("./") {
         // can not anlyze where the 'current' directory is
         Err(EpubBuilderError::IllegalManifestPath { manifest_id: id.to_string() })?
@@ -741,9 +741,7 @@ fn normalize_manifest_path<TempD: AsRef<Path>, S: AsRef<str>, P: AsRef<Path>>(
     };
 
     #[cfg(windows)]
-    {
-        target_path = PathBuf::from(target_path.to_string_lossy().replace('\\', "/"));
-    }
+    let target_path = PathBuf::from(target_path.to_string_lossy().replace('\\', "/"));
 
     Ok(target_path)
 }

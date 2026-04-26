@@ -26,7 +26,7 @@ use std::{
     io::{BufReader, Read, Seek},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
 };
@@ -70,10 +70,10 @@ use crate::{
 /// ```
 ///
 /// ## Notes
-/// - The `EpubDoc` structure is thread-safe **if and only if** the structure is immutable.
-/// - The fact that `EpubDoc` is mutable has no practical meaning; modifications
-///   to the structure data are not stored in the epub file.
-pub struct EpubDoc<R: Read + Seek> {
+/// - The `EpubDoc` structure is thread-safe.
+/// - The `EpubDoc` structure is immutable, modifying fields in a struct
+///   will not modify the actual document.
+pub struct EpubDoc<R: Read + Seek + Send> {
     /// The structure of the epub file that actually holds it
     pub(crate) archive: Arc<Mutex<ZipArchive<R>>>,
 
@@ -145,9 +145,12 @@ pub struct EpubDoc<R: Read + Seek> {
 
     /// Whether the epub file contains encryption information
     has_encryption: bool,
+
+    /// The metadata sheet cache
+    metadata_sheet: OnceLock<MetadataSheet>,
 }
 
-impl<R: Read + Seek> EpubDoc<R> {
+impl<R: Read + Seek + Send> EpubDoc<R> {
     /// Creates a new EPUB document instance from a reader
     ///
     /// This function is responsible for the core logic of parsing EPUB files,
@@ -225,6 +228,7 @@ impl<R: Read + Seek> EpubDoc<R> {
             catalog_title: String::new(),
             current_spine_index: AtomicUsize::new(0),
             has_encryption,
+            metadata_sheet: OnceLock::new(),
         };
 
         let metadata_element = package.find_elements_by_name("metadata").next().unwrap();
@@ -721,75 +725,76 @@ impl<R: Read + Seek> EpubDoc<R> {
     /// - Multi-value metadata (title, creator, etc.) are stored in Vec fields in order
     /// - Date metadata extracts event type from refinements (e.g., "publication", "modification")
     /// - Identifier metadata uses item IDs as keys in the HashMap
-    pub fn get_metadata_sheet(&self) -> MetadataSheet {
-        let mut sheet = MetadataSheet::new();
-        for item in &self.metadata {
-            let value = item.value.clone();
+    pub fn get_metadata_sheet(&self) -> &MetadataSheet {
+        self.metadata_sheet.get_or_init(|| {
+            let mut sheet = MetadataSheet::new();
+            for item in &self.metadata {
+                let value = item.value.clone();
 
-            match item.property.as_str() {
-                "title" => {
-                    sheet.title.push(value);
-                }
-                "creator" => {
-                    sheet.creator.push(value);
-                }
-                "contributor" => {
-                    sheet.contributor.push(value);
-                }
-                "subject" => {
-                    sheet.subject.push(value);
-                }
-                "language" => {
-                    sheet.language.push(value);
-                }
-                "relation" => {
-                    sheet.relation.push(value);
-                }
-                "date" => {
-                    let event = item
-                        .refined
-                        .iter()
-                        .filter_map(|refine| {
-                            if refine.property.eq("event") {
-                                Some(refine.value.clone())
-                            } else {
-                                None
-                            }
-                        })
-                        .next()
-                        .unwrap_or_default();
-                    sheet.date.insert(value, event);
-                }
-                "identifier" => {
-                    let id = item.id.clone().unwrap_or_default();
-                    sheet.identifier.insert(id, value);
-                }
-                "description" => {
-                    sheet.description = value;
-                }
-                "format" => {
-                    sheet.format = value;
-                }
-                "publisher" => {
-                    sheet.publisher = value;
-                }
-                "rights" => {
-                    sheet.rights = value;
-                }
-                "source" => {
-                    sheet.source = value;
-                }
-                "ccoverage" => {
-                    sheet.coverage = value;
-                }
-                "type" => {
-                    sheet.epub_type = value;
-                }
-                _ => {}
-            };
-        }
-
-        sheet
+                match item.property.as_str() {
+                    "title" => {
+                        sheet.title.push(value);
+                    }
+                    "creator" => {
+                        sheet.creator.push(value);
+                    }
+                    "contributor" => {
+                        sheet.contributor.push(value);
+                    }
+                    "subject" => {
+                        sheet.subject.push(value);
+                    }
+                    "language" => {
+                        sheet.language.push(value);
+                    }
+                    "relation" => {
+                        sheet.relation.push(value);
+                    }
+                    "date" => {
+                        let event = item
+                            .refined
+                            .iter()
+                            .filter_map(|refine| {
+                                if refine.property.eq("event") {
+                                    Some(refine.value.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .next()
+                            .unwrap_or_default();
+                        sheet.date.insert(value, event);
+                    }
+                    "identifier" => {
+                        let id = item.id.clone().unwrap_or_default();
+                        sheet.identifier.insert(id, value);
+                    }
+                    "description" => {
+                        sheet.description = value;
+                    }
+                    "format" => {
+                        sheet.format = value;
+                    }
+                    "publisher" => {
+                        sheet.publisher = value;
+                    }
+                    "rights" => {
+                        sheet.rights = value;
+                    }
+                    "source" => {
+                        sheet.source = value;
+                    }
+                    "ccoverage" => {
+                        sheet.coverage = value;
+                    }
+                    "type" => {
+                        sheet.epub_type = value;
+                    }
+                    _ => {}
+                };
+            }
+            sheet
+        })
     }
 
     /// Retrieve resource data by resource ID
@@ -980,7 +985,7 @@ impl<R: Read + Seek> EpubDoc<R> {
     /// - The index must be less than the total number of spine projects.
     /// - If the resource is encrypted, it will be automatically decrypted before returning.
     /// - It does not check whether the Spine project follows a linear reading order.
-    pub fn navigate_by_spine_index(&mut self, index: usize) -> Option<(Vec<u8>, String)> {
+    pub fn navigate_by_spine_index(&self, index: usize) -> Option<(Vec<u8>, String)> {
         if index >= self.spine.len() {
             return None;
         }
@@ -1031,7 +1036,7 @@ impl<R: Read + Seek> EpubDoc<R> {
     ///   the MIME type
     /// - `None`: Already in the last chapter, the current chapter is not linear,
     ///   or data retrieval failed
-    pub fn spine_next(&mut self) -> Option<(Vec<u8>, String)> {
+    pub fn spine_next(&self) -> Option<(Vec<u8>, String)> {
         let current_index = self.current_spine_index.load(Ordering::SeqCst);
         if current_index >= self.spine.len() - 1 || !self.spine[current_index].linear {
             return None;
@@ -1377,23 +1382,21 @@ impl<R: Read + Seek> EpubDoc<R> {
     /// - `Err(EpubError)`: Relative link leakage
     #[inline]
     fn normalize_manifest_path(&self, path: &str) -> Result<PathBuf, EpubError> {
-        let mut path = if path.starts_with("../") {
+        let path = if path.starts_with("../") {
             let mut current_dir = self.epub_path.join(&self.package_path);
             current_dir.pop();
 
             check_realtive_link_leakage(self.epub_path.clone(), current_dir, path)
                 .map(PathBuf::from)
                 .ok_or_else(|| EpubError::RelativeLinkLeakage { path: path.to_string() })?
-        } else if let Some(path) = path.strip_prefix("/") {
-            PathBuf::from(path.to_string())
+        } else if let Some(stripped) = path.strip_prefix("/") {
+            PathBuf::from(stripped.to_string())
         } else {
             self.base_path.join(path)
         };
 
         #[cfg(windows)]
-        {
-            path = PathBuf::from(path.to_string_lossy().replace('\\', "/"));
-        }
+        let path = PathBuf::from(path.to_string_lossy().replace('\\', "/"));
 
         Ok(path)
     }
@@ -1729,7 +1732,7 @@ mod tests {
             let doc = EpubDoc::new(epub_file);
             assert!(doc.is_ok());
 
-            let mut doc = doc.unwrap();
+            let doc = doc.unwrap();
             assert_eq!(doc.spine.len(), 4);
             assert_eq!(
                 doc.navigate_by_spine_index(0).unwrap(),
@@ -1758,7 +1761,7 @@ mod tests {
             let doc = EpubDoc::new(epub_file);
             assert!(doc.is_ok());
 
-            let mut doc = doc.unwrap();
+            let doc = doc.unwrap();
             assert_eq!(doc.spine.len(), 4);
 
             let result = doc.spine_prev();
@@ -1782,7 +1785,7 @@ mod tests {
             let doc = EpubDoc::new(epub_file);
             assert!(doc.is_ok());
 
-            let mut doc = doc.unwrap();
+            let doc = doc.unwrap();
             assert!(doc.spine_prev().is_none());
             assert!(doc.spine_next().is_none());
 
@@ -1825,7 +1828,7 @@ mod tests {
             let doc = EpubDoc::new(epub_file);
             assert!(doc.is_ok());
 
-            let mut doc = doc.unwrap();
+            let doc = doc.unwrap();
             assert_eq!(doc.spine.len(), 4);
 
             loop {
