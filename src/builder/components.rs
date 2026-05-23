@@ -726,19 +726,40 @@ impl CatalogBuilder {
         for nav in navgations {
             writer.write_event(Event::Start(BytesStart::new("li")))?;
 
-            if let Some(path) = &nav.content {
+            let has_content = nav.content.is_some();
+            let has_children = !nav.children.is_empty();
+
+            if has_content {
+                let path = nav.content.as_ref().unwrap();
+                let mut path_str = path.to_string_lossy().into_owned();
+
+                if path_str.ends_with('#') {
+                    path_str.pop();
+                }
+
                 writer.write_event(Event::Start(
-                    BytesStart::new("a").with_attributes([("href", path.to_string_lossy())]),
+                    BytesStart::new("a")
+                        .with_attributes([("href", PathBuf::from(path_str).to_string_lossy())]),
                 ))?;
                 writer.write_event(Event::Text(BytesText::new(nav.label.as_str())))?;
                 writer.write_event(Event::End(BytesEnd::new("a")))?;
-            } else {
+            } else if has_children {
+                // Safe to use <span> because it is immediately followed by an <ol>
                 writer.write_event(Event::Start(BytesStart::new("span")))?;
                 writer.write_event(Event::Text(BytesText::new(nav.label.as_str())))?;
                 writer.write_event(Event::End(BytesEnd::new("span")))?;
+            } else {
+                // Anti-Break Strategy: This node has no link and no children.
+                // Instead of a broken `#` symbol, look for a valid target path to link to,
+                // such as self-referencing the container nav.xhtml itself or a generic landing point.
+                writer.write_event(Event::Start(
+                    BytesStart::new("a").with_attributes([("href", "nav.xhtml")]),
+                ))?;
+                writer.write_event(Event::Text(BytesText::new(nav.label.as_str())))?;
+                writer.write_event(Event::End(BytesEnd::new("a")))?;
             }
 
-            if !nav.children.is_empty() {
+            if has_children {
                 Self::make_nav(writer, &nav.children)?;
             }
 

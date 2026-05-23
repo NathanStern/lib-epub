@@ -169,7 +169,6 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
     ///
     /// ## Notes
     /// - This function assumes the EPUB file structure is valid
-    // TODO: 增加对必需的 metadata 的检查
     pub fn from_reader(reader: R, epub_path: PathBuf) -> Result<Self, EpubError> {
         // Parsing process
         // 1. Verify that the ZIP compression method conforms to the EPUB specification
@@ -437,7 +436,6 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
     /// the encryption information describes which resources are encrypted
     /// and the encryption methods used.
     ///
-    /// TODO: 需要对使用非对称加密数据的加密项进行额外处理，以获取非对称加密密钥
     fn parse_encryption(&mut self) -> Result<(), EpubError> {
         if !self.has_encryption() {
             return Ok(());
@@ -564,7 +562,14 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
                     })?;
 
                 let nav_file =
-                    get_file_in_zip_archive(&mut archive, nav_path.to_str().unwrap())?.decode()?;
+                    match get_file_in_zip_archive(&mut archive, nav_path.to_str().unwrap()) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!("File not found: {:?}", nav_path);
+                            panic!("{:#}", err)
+                        }
+                    }
+                    .decode()?;
 
                 let nav_element = XmlReader::parse(&nav_file)?;
                 let nav = nav_element
@@ -1084,7 +1089,7 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
         if let Some(version) = opf_element.get_attr("version") {
             match version.as_str() {
                 "2.0" => return Ok(EpubVersion::Version2_0),
-                "3.0" => return Ok(EpubVersion::Version3_0),
+                "3.3" => return Ok(EpubVersion::Version3_0),
                 _ => {}
             }
         }
@@ -1393,6 +1398,7 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
             PathBuf::from(stripped.to_string())
         } else {
             self.base_path.join(path)
+            // PathBuf::from(path)
         };
 
         #[cfg(windows)]
@@ -1411,7 +1417,6 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
     /// ## Notes
     /// If an invalid fallback chain is found, a warning log will be logged
     /// but the processing flow will not be interrupted.
-    // TODO: consider using BFS to validate fallback chains, to provide efficient
     fn validate_fallback_chains(&self) {
         for (id, item) in &self.manifest {
             if item.fallback.is_none() {
@@ -2421,6 +2426,10 @@ mod tests {
     fn test_parse_manifest() {
         let epub_file = Path::new("./test_case/ocf-package_multiple.epub");
         let doc = EpubDoc::new(epub_file);
+        match doc {
+            Ok(_) => {}
+            Err(err) => panic!("{:#}", err),
+        }
         assert!(doc.is_ok());
 
         let manifest = r#"
@@ -2495,7 +2504,11 @@ mod tests {
 
         let element = element.unwrap();
         let result = doc.parse_manifest(&element);
-        assert!(result.is_ok());
+        match result {
+            Ok(_) => {}
+            Err(err) => panic!("{:#}", err),
+        }
+        // assert!(result.is_ok());
     }
 
     /// Test for function `has_encryption`

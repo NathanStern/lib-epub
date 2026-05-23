@@ -51,6 +51,7 @@ use quick_xml::{
     Writer,
     events::{BytesDecl, BytesEnd, BytesStart, Event},
 };
+use uuid::Uuid;
 use walkdir::WalkDir;
 use zip::{CompressionMethod, ZipWriter, write::FileOptions};
 
@@ -165,7 +166,7 @@ impl EpubBuilder<EpubVersion3> {
     /// - `Ok(EpubBuilder)`: Builder instance created successfully
     /// - `Err(EpubError)`: Error occurred during builder initialization
     pub fn new() -> Result<Self, EpubError> {
-        let temp_dir = env::temp_dir().join(local_time());
+        let temp_dir = env::temp_dir().join(format!("{}-{}", local_time(), Uuid::new_v4()));
         fs::create_dir(&temp_dir)?;
         fs::create_dir(temp_dir.join("META-INF"))?;
 
@@ -409,11 +410,32 @@ impl EpubBuilder<EpubVersion3> {
         // pack zip file
         let file = File::create(output_path)?;
         let mut zip = ZipWriter::new(file);
-        let options = FileOptions::<()>::default().compression_method(CompressionMethod::Stored);
+        let stored = FileOptions::<()>::default().compression_method(CompressionMethod::Stored);
+        let options = FileOptions::<()>::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(9)); // maximum possible DEFLATE compression
 
-        for entry in WalkDir::new(&self.temp_dir) {
-            let entry = entry?;
+        // We need to store the mimetype at the root
+        let mimetype_path = self.temp_dir.join("mimetype");
+
+        // Open mimetype file and write to directory first
+        zip.start_file("mimetype", stored)?;
+        let mut mime_file = File::open(mimetype_path)?;
+        std::io::copy(&mut mime_file, &mut zip)?;
+
+        let entries: Vec<_> = WalkDir::new(&self.temp_dir)
+            .sort_by_file_name()
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .collect();
+
+        for entry in entries {
             let path = entry.path();
+
+            // skip the mimetype file since we've already written it
+            if path.file_name().map(|f| f == "mimetype").unwrap_or(false) {
+                continue;
+            }
 
             // It can be asserted that the path is prefixed with temp_dir,
             // and there will be no boundary cases of symbolic links and hard links, etc.
@@ -421,16 +443,17 @@ impl EpubBuilder<EpubVersion3> {
             let target_path = relative_path.to_string_lossy().replace("\\", "/");
 
             if path.is_file() {
+                if !path.parent().unwrap().is_dir() {
+                    fs::create_dir_all(path.parent().unwrap())?;
+                }
                 zip.start_file(target_path, options)?;
 
                 let mut file = File::open(path)?;
                 std::io::copy(&mut file, &mut zip)?;
-            } else if path.is_dir() {
-                zip.add_directory(target_path, options)?;
             }
         }
 
-        zip.finish()?;
+        zip.finish()?.sync_all()?;
         Ok(())
     }
 
@@ -568,15 +591,23 @@ impl EpubBuilder<EpubVersion3> {
         let mut writer = Writer::new(Cursor::new(Vec::new()));
         self.catalog.make(&mut writer)?;
 
-        let file_path = self.temp_dir.join("nav.xhtml");
+        let nav_path = PathBuf::from(self.rootfiles.first().expect("Rootfiles not initialized"))
+            .parent()
+            .unwrap_or(Path::new(""))
+            .join("nav.xhtml");
+
+        let file_path = self.temp_dir.join(&nav_path);
         let file_data = writer.into_inner().into_inner();
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(file_path, file_data)?;
 
         self.manifest.insert(
             "nav".to_string(),
             ManifestItem {
                 id: "nav".to_string(),
-                path: PathBuf::from("/nav.xhtml"),
+                path: PathBuf::from("nav.xhtml"),
                 mime: "application/xhtml+xml".to_string(),
                 properties: Some("nav".to_string()),
                 fallback: None,
@@ -605,7 +636,7 @@ impl EpubBuilder<EpubVersion3> {
             ("xmlns", "http://www.idpf.org/2007/opf"),
             ("xmlns:dc", "http://purl.org/dc/elements/1.1/"),
             ("unique-identifier", "pub-id"),
-            ("version", "3.0"),
+            ("version", "3.3"),
         ])))?;
 
         self.metadata.make(&mut writer)?;
@@ -945,7 +976,11 @@ mod tests {
                 .unwrap();
 
             let file = env::temp_dir().join(format!("{}.epub", local_time()));
-            assert!(builder.build(&file).is_ok());
+            match builder.build(&file) {
+                Ok(_) => {}
+                Err(err) => panic!("{:#?}", err),
+            }
+            // assert!(builder.build(&file).is_ok());
         }
 
         #[test]
@@ -1051,6 +1086,8 @@ mod tests {
                 result.unwrap_err(),
                 EpubBuilderError::NavigationInfoUninitalized.into()
             );
+
+            builder.add_rootfile("rootfile.ocf").unwrap();
 
             builder.add_catalog_item(NavPoint::new("test"));
             assert!(builder.make_navigation_document().is_ok());
