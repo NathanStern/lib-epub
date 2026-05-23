@@ -1089,6 +1089,7 @@ impl<R: Read + Seek + Send> EpubDoc<R> {
         if let Some(version) = opf_element.get_attr("version") {
             match version.as_str() {
                 "2.0" => return Ok(EpubVersion::Version2_0),
+                "3.0" => return Ok(EpubVersion::Version3_0),
                 "3.3" => return Ok(EpubVersion::Version3_0),
                 _ => {}
             }
