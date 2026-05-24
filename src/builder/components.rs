@@ -534,12 +534,16 @@ impl ManifestBuilder {
 pub struct SpineBuilder {
     /// List of spine items defining the reading order
     pub(crate) spine: Vec<SpineItem>,
+    pub(crate) attributes: Vec<(String, String)>,
 }
 
 impl SpineBuilder {
     /// Creates a new empty `SpineBuilder` instance
     pub(crate) fn new() -> Self {
-        Self { spine: Vec::new() }
+        Self {
+            spine: Vec::new(),
+            attributes: Vec::new(),
+        }
     }
 
     /// Add a spine item
@@ -557,19 +561,38 @@ impl SpineBuilder {
         self
     }
 
+    pub fn add_attribute(&mut self, attribute_name: &str, attribute_value: &str) -> &mut Self {
+        self.attributes
+            .push((String::from(attribute_name), String::from(attribute_value)));
+        self
+    }
+
+    pub(crate) fn attributes(&self) -> Vec<(&str, &str)> {
+        let mut attributes = Vec::new();
+
+        for (att, val) in &self.attributes {
+            attributes.push((att.as_str(), val.as_str()));
+        }
+
+        attributes
+    }
+
     /// Clear all spine items
     ///
     /// Removes all spine items from the builder.
     pub fn clear(&mut self) -> &mut Self {
         self.spine.clear();
+        self.attributes.clear();
         self
     }
 
     /// Generate the spine XML content
     ///
     /// Writes the XML representation of the spine to the provided writer.
-    pub(crate) fn make(&self, writer: &mut XmlWriter) -> Result<(), EpubError> {
-        writer.write_event(Event::Start(BytesStart::new("spine")))?;
+    pub(crate) fn make(&mut self, writer: &mut XmlWriter) -> Result<(), EpubError> {
+        writer.write_event(Event::Start(
+            BytesStart::new("spine").with_attributes(self.attributes()),
+        ))?;
 
         for spine in &self.spine {
             writer.write_event(Event::Empty(
@@ -910,5 +933,38 @@ impl DocumentBuilder {
         }
 
         Ok(manifest)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    mod spine_builder {
+        use std::io::Cursor;
+
+        use crate::{
+            builder::{SpineBuilder, XmlWriter},
+            utils::XmlReader,
+        };
+
+        // test that the attrbutes are correctly written
+        #[test]
+        fn test_attribute_write() {
+            let mut spine_builder = SpineBuilder::new();
+
+            spine_builder.add_attribute("test", "test");
+
+            let written_bytes = Vec::new();
+            let mut writer = XmlWriter::new(Cursor::new(written_bytes));
+
+            spine_builder.make(&mut writer).unwrap();
+
+            // read the bytes back in
+            let written_xml = String::from_utf8(writer.into_inner().into_inner()).unwrap();
+            let reader = XmlReader::parse(&written_xml).unwrap();
+
+            let test_attr = reader.get_attr("test");
+            assert_ne!(test_attr, None);
+            assert_eq!(test_attr.unwrap(), "test");
+        }
     }
 }

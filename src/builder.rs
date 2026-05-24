@@ -263,6 +263,15 @@ impl EpubBuilder<EpubVersion3> {
         self
     }
 
+    pub fn add_spine_attribute(
+        &mut self,
+        attribute_name: &str,
+        attribute_value: &str,
+    ) -> &mut Self {
+        self.spine.add_attribute(attribute_name, attribute_value);
+        self
+    }
+
     /// Set catalog title
     ///
     /// ## Parameters
